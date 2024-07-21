@@ -1,4 +1,3 @@
-fastapi
-uvicorn
-transformers
-torch
+discord.py
+youtube_dl
+flask
