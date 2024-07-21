@@ -118,4 +118,4 @@ if __name__ == "__main__":
     import threading
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
-    bot.run('YOUR_TOKEN_HERE')
+    bot.run('MTI2MzkwODE0NTg0MzkzMzM1Nw.GIpZXg.qOhagPoLp0L3NR5xO-xd_GBLRVFi0TRF6-RFbE')
