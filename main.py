@@ -1,67 +1,121 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from transformers import pipeline, Conversation, GPT2LMHeadModel, GPT2Tokenizer
+import discord
+from discord.ext import commands
+import youtube_dl
+import asyncio
+from flask import Flask, request
 
-app = FastAPI()
+bot = commands.Bot(command_prefix='!', help_command=None)  # No registrar comandos
 
-# Configura los pipelines de diálogo
-VALID_MODELS = {
-    'microsoft/DialoGPT-medium': pipeline('conversational', model='microsoft/DialoGPT-medium'),
-    'microsoft/DialoGPT-small': pipeline('conversational', model='microsoft/DialoGPT-small'),
-    'microsoft/DialoGPT-large': pipeline('conversational', model='microsoft/DialoGPT-large'),
+ytdl_format_options = {
+    'format': 'bapest',
+    'restrictfilenames': True,
+    'noplaylist': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': False,
+    'logtostderr': False,
+    'quiet': True,
+    'no_warnings': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0'
 }
 
-# Configura los modelos GPT-2
-GPT2_MODELS = {
-    'gpt2': {
-        'model': GPT2LMHeadModel.from_pretrained('gpt2'),
-        'tokenizer': GPT2Tokenizer.from_pretrained('gpt2')
-    },
-    'gpt2-medium': {
-        'model': GPT2LMHeadModel.from_pretrained('gpt2-medium'),
-        'tokenizer': GPT2Tokenizer.from_pretrained('gpt2-medium')
-    },
-    'gpt2-large': {
-        'model': GPT2LMHeadModel.from_pretrained('gpt2-large'),
-        'tokenizer': GPT2Tokenizer.from_pretrained('gpt2-large')
-    },
-    'gpt2-xl': {
-        'model': GPT2LMHeadModel.from_pretrained('gpt2-xl'),
-        'tokenizer': GPT2Tokenizer.from_pretrained('gpt2-xl')
-    },
+ffmpeg_format_options = {
+    'options': '-vn'
 }
 
-class ChatRequest(BaseModel):
-    model: str
-    msg: str
-    context: str
+ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 
-@app.get("/")
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get('title')
+        self.url = ""
+
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=False):
+        loop = loop or asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+        if 'entries' in data:
+            data = data['entries'][0]
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_format_options), data=data)
+
+async def play_music(url, guild):
+    voice_channel = guild.voice_client
+    if voice_channel is None:
+        return "El bot no está conectado a un canal de voz."
+
+    player = await YTDLSource.from_url(url, loop=bot.loop)
+    voice_channel.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+    return f'Reproduciendo: {player.title}'
+
+async def pause_music(guild):
+    voice_channel = guild.voice_client
+    if voice_channel.is_playing():
+        voice_channel.pause()
+        return "Música pausada."
+    return "No hay música reproduciéndose."
+
+async def resume_music(guild):
+    voice_channel = guild.voice_client
+    if voice_channel.is_paused():
+        voice_channel.resume()
+        return "Música reanudada."
+    return "La música no está pausada."
+
+async def stop_music(guild):
+    voice_channel = guild.voice_client
+    if voice_channel.is_playing() or voice_channel.is_paused():
+        voice_channel.stop()
+        return "Música detenida."
+    return "No hay música reproduciéndose."
+
+app = Flask(__name__)
+
+@app.route("/", methods=['GET'])
 def on_router():
-    return "200 OK"
+    return "200"
 
-@app.post("/api/ai/")
-async def chat(request: ChatRequest):
-    model_name = request.model
-    
-    if model_name in VALID_MODELS:
-        # Configura el contexto de la conversación para modelos de diálogo
-        conversation = Conversation(request.context)
-        conversation.add_user_input(request.msg)
-        chatbot = VALID_MODELS[model_name]
-        response = chatbot(conversation)
-        response_text = response.generated_responses[-1]
-        return {"response": response_text}
-    
-    elif model_name in GPT2_MODELS:
-        # Configura el contexto para modelos GPT-2
-        tokenizer = GPT2_MODELS[model_name]['tokenizer']
-        model = GPT2_MODELS[model_name]['model']
-        inputs = tokenizer.encode(request.context + " " + request.msg, return_tensors='pt')
-        outputs = model.generate(inputs, max_length=150, num_return_sequences=1, no_repeat_ngram_size=2, early_stopping=True)
-        response_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return {"response": response_text}
-    
-    else:
-        # Si el modelo no es válido, devuelve una lista de modelos válidos
-        return {"error": "Modelo no válido", "valid_models": list(VALID_MODELS.keys()) + list(GPT2_MODELS.keys())}
+@app.route("/api/musica/", methods=['POST'])
+def handle_music():
+    data = request.json
+    if 'type' in data and 'música' in data:
+        if data['type'] == 'play':
+            url = data['música']
+            guild = bot.guilds[0]  # Aquí puedes mejorar para seleccionar el servidor correcto
+            response_message = asyncio.run(play_music(url, guild))
+            return response_message
+    return "Solicitud no válida."
+
+@app.route("/api/control", methods=['GET'])
+def control_music():
+    params = request.args
+    if 'type' in params:
+        action_type = params['type']
+        guild = bot.guilds[0]  # Aquí puedes mejorar para seleccionar el servidor correcto
+
+        if action_type == 'pause':
+            response_message = asyncio.run(pause_music(guild))
+        elif action_type == 'resume':
+            response_message = asyncio.run(resume_music(guild))
+        elif action_type == 'stop':
+            response_message = asyncio.run(stop_music(guild))
+        else:
+            response_message = "Tipo de acción no válido."
+        
+        return response_message
+    return "Solicitud no válida."
+
+@bot.event
+async def on_ready():
+    print(f'{bot.user} se ha conectado a Discord!')
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+if __name__ == "__main__":
+    import threading
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+    bot.run('YOUR_TOKEN_HERE')
