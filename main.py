@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import pipeline, Conversation, GPT2LMHeadModel, GPT2Tokenizer
-import torch
 
 app = FastAPI()
 
